@@ -1,0 +1,34 @@
+# bb-plugins
+
+My plugins for [bb](https://getbb.app). Each plugin lives in its own folder under `plugins/`
+with its own `package.json`, and `.bb/plugins.json` lists them.
+
+| Plugin | What it does |
+| --- | --- |
+| [liminal-pool](plugins/liminal-pool) | Runs Claude Code threads on Liminal Tools' Claude accounts, with Liminal's selection and failover, a Mana Bar, and an account picker in the composer. |
+
+## Working on a plugin
+
+```sh
+cd plugins/<name>
+npm install --include=dev
+bb plugin build
+bb plugin install .        # path install: bb loads it from this folder
+bb plugin reload <name>    # after later builds
+```
+
+## Adding a plugin
+
+```sh
+cd plugins && bb plugin new <name>
+mv bb-plugin-<name> <name>
+```
+
+Then add `{ "name": "<name>", "source": "./plugins/<name>" }` to `.bb/plugins.json` and a row
+to the table above.
+
+## Installing from GitHub instead
+
+```sh
+bb plugin install git:https://github.com/liminalwarmth/bb-plugins.git@main --plugin <name>
+```
