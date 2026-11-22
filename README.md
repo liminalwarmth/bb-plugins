@@ -6,7 +6,7 @@ with its own `package.json`, and `.bb/plugins.json` lists them.
 | Plugin | What it does |
 | --- | --- |
 | [liminal-pool](plugins/liminal-pool) | Runs Claude Code threads on Liminal Tools' Claude accounts, with Liminal's selection and failover, a Mana Bar, and an account picker in the composer. |
-| [opencode-picker](plugins/opencode-picker) | Pins your 4 most recently used OpenCode models under Recent, shows compact relative cost badges (`Free`, `$`–`$$$$`), and displays relative 1–5 Artificial Analysis strength bars in the model picker. |
+| [opencode-picker](plugins/opencode-picker) | Lists only models available on the OpenCode Go plan in the model picker, pins your most recently used models under Recent, and shows compact relative cost badges (`Free`, `$`–`$$$$`) plus relative 1–5 Artificial Analysis strength bars. |
 | [hotfixes](plugins/hotfixes) | Local hotfixes for BB desktop/UI bugs while waiting on upstream releases, each toggleable in plugin settings and removable once upstream ships. |
 
 ## Working on a plugin

@@ -2,10 +2,11 @@ import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { readOpenCodeDbRecentModels } from "./src/opencode-history.ts";
 import {
+  buildGoModelKeys,
   buildPriceMaps,
   buildScoreMap,
   DEFAULT_BENCHMARK_URL,
-  isAnthropicOrOpenAiModel,
+  isGoPlanModel,
   OPENCODE_GO_MODELS_URL,
   OPENCODE_ZEN_MODELS_URL,
   parseBenchmarkPayload,
@@ -54,7 +55,8 @@ const pricedModelSchema = z.object({
 const pickerStateSchema = z.object({
   recent: z.array(recentModelSchema),
   recentCount: z.number().int().min(1).max(10),
-  hideAnthropicAndOpenAi: z.boolean(),
+  goModelsOnly: z.boolean(),
+  goModelKeys: z.array(z.string()),
   scores: z.record(z.string(), scoredModelSchema),
   pricesByRoute: z.record(z.string(), pricedModelSchema),
   pricesByNorm: z.record(z.string(), pricedModelSchema),
@@ -108,11 +110,11 @@ export default async function plugin(bb: BbPluginApi) {
       experimental_schema: z.number().int().min(1).max(10),
       default: 4,
     },
-    hideAnthropicAndOpenAi: {
+    goModelsOnly: {
       type: "boolean",
-      label: "Hide Anthropic & OpenAI models",
+      label: "Go plan models only",
       description:
-        "Hide Claude and OpenAI models from the OpenCode picker so it focuses on OpenCode's other models.",
+        "Only list models offered on the OpenCode Go plan, taken from OpenCode's live Go catalog. Hides Zen pay-per-token and Claude/OpenAI routes; if the catalog cannot be fetched, the full model list is shown.",
       default: true,
     },
     benchmarkUrl: {
@@ -482,18 +484,24 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   async function buildState(forceRefresh = false): Promise<PickerState> {
-    const [{ recentCount, hideAnthropicAndOpenAi }, recent, benchmarks, pricing] = await Promise.all([
+    const [{ recentCount, goModelsOnly }, recent, benchmarks, pricing] = await Promise.all([
       settings.get(),
       getMergedRecent(forceRefresh),
       ensureBenchmarks(forceRefresh),
       ensurePricing(forceRefresh),
     ]);
 
-    const filteredRecent = hideAnthropicAndOpenAi
-      ? recent.filter(
-          (item) => !isAnthropicOrOpenAiModel(item.displayName, item.routeProviderId, item.modelId),
-        )
-      : recent;
+    const goEntries = pricing
+      ? pricing.entries.filter((entry) => entry.routeProviderId === "opencode-go")
+      : [];
+    const goModelKeys = goModelsOnly ? buildGoModelKeys(goEntries) : [];
+    const goKeySet = new Set(goModelKeys);
+    const filteredRecent =
+      goModelsOnly && goKeySet.size > 0
+        ? recent.filter((item) =>
+            isGoPlanModel(goKeySet, item.displayName, item.routeProviderId, item.modelId),
+          )
+        : recent;
 
     const priceMaps = pricing
       ? buildPriceMaps(pricing.entries)
@@ -502,7 +510,8 @@ export default async function plugin(bb: BbPluginApi) {
     return {
       recent: filteredRecent.slice(0, recentCount),
       recentCount,
-      hideAnthropicAndOpenAi,
+      goModelsOnly,
+      goModelKeys,
       scores: benchmarks ? buildScoreMap(benchmarks.entries, benchmarks.maxScore) : {},
       pricesByRoute: priceMaps.byRoute,
       pricesByNorm: priceMaps.byNorm,

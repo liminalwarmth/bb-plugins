@@ -12,7 +12,7 @@ import {
   computeModelSortWeight,
   COST_COLORS,
   COST_LABELS,
-  isAnthropicOrOpenAiModel,
+  isGoPlanModel,
   lookupPrice,
   lookupScore,
   OPENCODE_ROUTE_PROVIDERS,
@@ -214,6 +214,8 @@ function decorateDialog(dialog: Element, state: PickerState) {
   }
 
   const nativeOptions = getNativeOptions(listbox);
+  const goModelKeys =
+    state.goModelsOnly && state.goModelKeys.length > 0 ? new Set(state.goModelKeys) : null;
   const scoredOptions: Array<{
     button: HTMLButtonElement;
     displayName: string;
@@ -239,10 +241,7 @@ function decorateDialog(dialog: Element, state: PickerState) {
     const parsed = parseOptionTitle(titleSpan?.getAttribute("title"));
     if (!parsed) continue;
 
-    if (
-      state.hideAnthropicAndOpenAi &&
-      isAnthropicOrOpenAiModel(parsed.displayName, parsed.routeProviderId)
-    ) {
+    if (goModelKeys && !isGoPlanModel(goModelKeys, parsed.displayName, parsed.routeProviderId)) {
       button.setAttribute(HIDDEN_OPTION_ATTR, "true");
       button.style.display = "none";
       button.style.order = "";

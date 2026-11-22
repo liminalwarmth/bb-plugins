@@ -434,17 +434,32 @@ const COST_EFFICIENCY_WEIGHTS: Record<CostTier, number> = {
   4: -0.3,
 };
 
-export function isAnthropicOrOpenAiModel(
+export function buildGoModelKeys(entries: RawPriceEntry[]): string[] {
+  const keys = new Set<string>();
+  for (const entry of entries) {
+    if (entry.routeProviderId !== "opencode-go") continue;
+    keys.add(recentModelKey(entry.displayName, entry.routeProviderId));
+    keys.add(routeNormKey(entry.routeProviderId, entry.displayName));
+    keys.add(routeNormKey(entry.routeProviderId, entry.modelSlug));
+  }
+  return [...keys].sort();
+}
+
+export function isGoPlanModel(
+  goModelKeys: ReadonlySet<string>,
   displayName: string,
   routeProviderId: string,
   modelId?: string | null,
 ): boolean {
   const route = routeProviderId.trim().toLowerCase();
-  if (route === "claude-agent" || route === "openai" || route === "anthropic") {
-    return true;
+  if (route !== "opencode-go") return false;
+  if (goModelKeys.has(recentModelKey(displayName, route))) return true;
+  if (goModelKeys.has(routeNormKey(route, displayName))) return true;
+  if (modelId) {
+    const slug = modelId.includes("/") ? modelId.split("/").slice(1).join("/") : modelId;
+    if (slug && goModelKeys.has(routeNormKey(route, slug))) return true;
   }
-  const text = modelId ? `${displayName} ${modelId}` : displayName;
-  return /\b(claude|opus|sonnet|haiku|fable|gpt|codex)\b/i.test(text);
+  return false;
 }
 
 export function computeModelSortWeight(

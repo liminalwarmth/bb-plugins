@@ -7,11 +7,12 @@ import test from "node:test";
 import { readOpenCodeDbRecentModels } from "../src/opencode-history.ts";
 import {
   blendedCostToTier,
+  buildGoModelKeys,
   buildPriceMaps,
   buildScoreMap,
   computeModelSortWeight,
   goAllowancePctToTier,
-  isAnthropicOrOpenAiModel,
+  isGoPlanModel,
   lookupPrice,
   lookupScore,
   normalizeModelName,
@@ -235,13 +236,74 @@ test("computeModelSortWeight prioritizes strength while penalizing high cost mor
   assert.ok(strongHighCost > unrankedFree);
 });
 
-test("isAnthropicOrOpenAiModel detects Claude and OpenAI entries across all route providers", () => {
-  assert.equal(isAnthropicOrOpenAiModel("Fable 5.2", "claude-agent"), true);
-  assert.equal(isAnthropicOrOpenAiModel("Claude Haiku 5.5", "opencode-go"), true);
-  assert.equal(isAnthropicOrOpenAiModel("GPT-6.2 Sol", "openai"), true);
-  assert.equal(isAnthropicOrOpenAiModel("GPT-6 Luna", "opencode-go"), true);
-  assert.equal(isAnthropicOrOpenAiModel("GPT-5.3 Codex", "opencode"), true);
-  assert.equal(isAnthropicOrOpenAiModel("GLM-5.3", "opencode-go"), false);
-  assert.equal(isAnthropicOrOpenAiModel("DeepSeek V4 Pro", "opencode-go"), false);
-  assert.equal(isAnthropicOrOpenAiModel("Gemini 4 Neon", "opencode"), false);
+test("Go plan filtering keeps only live Go catalog models on the opencode-go route", () => {
+  const goEntries = parseOpenCodeModelsPricing(
+    {
+      data: [
+        {
+          id: "glm-5.3",
+          name: "GLM-5.3",
+          type: "chat",
+          cost: { text: { input: { price: 1.4 }, output: { price: 4.4 } } },
+          go: { monthly_usage: { go: 200 } },
+        },
+        {
+          id: "claude-haiku-5-5",
+          name: "Claude Haiku 5.5",
+          type: "chat",
+          cost: { text: { input: { price: 2 }, output: { price: 10 } } },
+          go: { monthly_usage: { go: 15 } },
+        },
+        {
+          id: "mimo-v2.6-flash",
+          name: "MiMo-V2.6-Flash",
+          type: "chat",
+          cost: { text: { input: { price: 0.2 }, output: { price: 0.8 } } },
+          go: { monthly_usage: { go: 100 } },
+        },
+        {
+          id: "beam-free",
+          name: "Beam Free",
+          type: "chat",
+          cost: { text: { input: { price: 0 }, output: { price: 0 } } },
+        },
+      ],
+    },
+    "opencode-go",
+  );
+  const zenEntries = parseOpenCodeModelsPricing(
+    {
+      data: [
+        {
+          id: "glm-5.3",
+          name: "GLM-5.3",
+          type: "chat",
+          cost: { text: { input: { price: 0.56 }, output: { price: 1.76 } } },
+        },
+        {
+          id: "deepseek-v4.1-flash-free",
+          name: "DeepSeek V4.1 Flash Free",
+          type: "chat",
+          cost: { text: { input: { price: 0 }, output: { price: 0 } } },
+        },
+      ],
+    },
+    "opencode",
+  );
+  const keys = new Set(buildGoModelKeys([...goEntries, ...zenEntries]));
+
+  assert.equal(isGoPlanModel(keys, "GLM-5.3", "opencode-go"), true);
+  assert.equal(isGoPlanModel(keys, "Claude Haiku 5.5", "opencode-go"), true);
+  assert.equal(isGoPlanModel(keys, "MiMo-V2.6-Flash", "opencode-go"), true);
+  assert.equal(isGoPlanModel(keys, "Beam Free", "opencode-go"), true);
+  assert.equal(isGoPlanModel(keys, "MiMo V2.5", "opencode-go"), false);
+  assert.equal(isGoPlanModel(keys, "GLM-5.3", "opencode"), false);
+  assert.equal(isGoPlanModel(keys, "DeepSeek V4.1 Flash Free", "opencode"), false);
+  assert.equal(isGoPlanModel(keys, "Fable 5.2", "claude-agent"), false);
+  assert.equal(isGoPlanModel(keys, "GPT-6 Luna", "openai"), false);
+  assert.equal(
+    isGoPlanModel(keys, "MiMo V2.6 Flash", "opencode-go", "opencode-go/mimo-v2.6-flash"),
+    true,
+  );
+  assert.equal(isGoPlanModel(new Set(), "GLM-5.3", "opencode-go"), false);
 });
