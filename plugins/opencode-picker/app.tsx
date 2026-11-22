@@ -12,6 +12,7 @@ import {
   computeModelSortWeight,
   COST_COLORS,
   COST_LABELS,
+  isAnthropicOrOpenAiModel,
   lookupPrice,
   lookupScore,
   OPENCODE_ROUTE_PROVIDERS,
@@ -30,6 +31,7 @@ const RECENT_CONTAINER_ATTR = "data-ocp-recent";
 const METRICS_ATTR = "data-ocp-metrics";
 const METRICS_KEY_ATTR = "data-ocp-metrics-key";
 const SORTED_LISTBOX_ATTR = "data-ocp-sorted";
+const HIDDEN_OPTION_ATTR = "data-ocp-hidden";
 const BAR_HEIGHTS = [4, 6, 8, 10, 12] as const;
 
 function formatRate(value: number): string {
@@ -163,6 +165,10 @@ function getNativeOptions(listbox: Element): HTMLButtonElement[] {
 function cleanupDialog(dialog: Element) {
   dialog.querySelectorAll(`[${RECENT_CONTAINER_ATTR}]`).forEach((node) => node.remove());
   dialog.querySelectorAll(`[${METRICS_ATTR}]`).forEach((node) => node.remove());
+  dialog.querySelectorAll<HTMLElement>(`[${HIDDEN_OPTION_ATTR}]`).forEach((node) => {
+    node.removeAttribute(HIDDEN_OPTION_ATTR);
+    node.style.display = "";
+  });
   const listbox = dialog.querySelector<HTMLElement>(`[${SORTED_LISTBOX_ATTR}]`);
   if (listbox) {
     listbox.removeAttribute(SORTED_LISTBOX_ATTR);
@@ -232,6 +238,21 @@ function decorateDialog(dialog: Element, state: PickerState) {
     const titleSpan = button.querySelector("span[title]");
     const parsed = parseOptionTitle(titleSpan?.getAttribute("title"));
     if (!parsed) continue;
+
+    if (
+      state.hideAnthropicAndOpenAi &&
+      isAnthropicOrOpenAiModel(parsed.displayName, parsed.routeProviderId)
+    ) {
+      button.setAttribute(HIDDEN_OPTION_ATTR, "true");
+      button.style.display = "none";
+      button.style.order = "";
+      continue;
+    }
+
+    if (button.hasAttribute(HIDDEN_OPTION_ATTR)) {
+      button.removeAttribute(HIDDEN_OPTION_ATTR);
+      button.style.display = "";
+    }
 
     const score = lookupScore(state.scores, parsed.displayName);
     const price = lookupPrice(

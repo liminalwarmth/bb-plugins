@@ -11,6 +11,7 @@ import {
   buildScoreMap,
   computeModelSortWeight,
   goAllowancePctToTier,
+  isAnthropicOrOpenAiModel,
   lookupPrice,
   lookupScore,
   normalizeModelName,
@@ -207,20 +208,20 @@ test("parseOpenCodeModelsPricing ranks Go models by monthly allowance burn and Z
   assert.equal(blendedCostToTier(16), 4);
 });
 
-test("computeModelSortWeight prioritizes strength while favoring lower cost", () => {
+test("computeModelSortWeight prioritizes strength while penalizing high cost more steeply", () => {
   const strongMidCost = computeModelSortWeight(
     { tier: 5, index: 61.4, aaName: "Gemini 4 Neon", creator: "Google" },
     { tier: 3, label: "$$$", input: 3, output: 15, blended: 6, goMonthlyLimit: null, goAllowancePctPer1M: null },
     64.6,
   );
-  const strongHighCost = computeModelSortWeight(
-    { tier: 5, index: 64.6, aaName: "Claude Fable 5.2", creator: "Anthropic" },
-    { tier: 4, label: "$$$$", input: 8, output: 40, blended: 16, goMonthlyLimit: null, goAllowancePctPer1M: null },
-    64.6,
-  );
   const capableFree = computeModelSortWeight(
     { tier: 3, index: 32.6, aaName: "DeepSeek V4.1 Flash", creator: "DeepSeek" },
     { tier: 0, label: "Free", input: 0, output: 0, blended: 0, goMonthlyLimit: null, goAllowancePctPer1M: null },
+    64.6,
+  );
+  const strongHighCost = computeModelSortWeight(
+    { tier: 4, index: 46.5, aaName: "Kimi K3.1 Pro", creator: "Moonshot" },
+    { tier: 4, label: "$$$$", input: 2, output: 10, blended: 4, goMonthlyLimit: 15, goAllowancePctPer1M: 26.67 },
     64.6,
   );
   const unrankedFree = computeModelSortWeight(
@@ -229,7 +230,18 @@ test("computeModelSortWeight prioritizes strength while favoring lower cost", ()
     64.6,
   );
 
-  assert.ok(strongMidCost > strongHighCost);
-  assert.ok(strongHighCost > capableFree);
-  assert.ok(capableFree > unrankedFree);
+  assert.ok(strongMidCost > capableFree);
+  assert.ok(capableFree > strongHighCost);
+  assert.ok(strongHighCost > unrankedFree);
+});
+
+test("isAnthropicOrOpenAiModel detects Claude and OpenAI entries across all route providers", () => {
+  assert.equal(isAnthropicOrOpenAiModel("Fable 5.2", "claude-agent"), true);
+  assert.equal(isAnthropicOrOpenAiModel("Claude Haiku 5.5", "opencode-go"), true);
+  assert.equal(isAnthropicOrOpenAiModel("GPT-6.2 Sol", "openai"), true);
+  assert.equal(isAnthropicOrOpenAiModel("GPT-6 Luna", "opencode-go"), true);
+  assert.equal(isAnthropicOrOpenAiModel("GPT-5.3 Codex", "opencode"), true);
+  assert.equal(isAnthropicOrOpenAiModel("GLM-5.3", "opencode-go"), false);
+  assert.equal(isAnthropicOrOpenAiModel("DeepSeek V4 Pro", "opencode-go"), false);
+  assert.equal(isAnthropicOrOpenAiModel("Gemini 4 Neon", "opencode"), false);
 });

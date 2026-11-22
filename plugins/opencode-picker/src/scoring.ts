@@ -426,17 +426,38 @@ export function lookupPrice(
   return null;
 }
 
+const COST_EFFICIENCY_WEIGHTS: Record<CostTier, number> = {
+  0: 1.0,
+  1: 0.8,
+  2: 0.5,
+  3: 0.1,
+  4: -0.3,
+};
+
+export function isAnthropicOrOpenAiModel(
+  displayName: string,
+  routeProviderId: string,
+  modelId?: string | null,
+): boolean {
+  const route = routeProviderId.trim().toLowerCase();
+  if (route === "claude-agent" || route === "openai" || route === "anthropic") {
+    return true;
+  }
+  const text = modelId ? `${displayName} ${modelId}` : displayName;
+  return /\b(claude|opus|sonnet|haiku|fable|gpt|codex)\b/i.test(text);
+}
+
 export function computeModelSortWeight(
   score: ScoredModel | null,
   price: PricedModel | null,
   maxScore: number,
 ): number {
-  const costBonus = price ? (4 - price.tier) / 4 : 0.25;
+  const costScore = price ? COST_EFFICIENCY_WEIGHTS[price.tier] : 0.1;
   if (score && maxScore > 0) {
     const strengthNorm = Math.min(1, Math.max(0, score.index / maxScore));
-    return 0.75 * strengthNorm + 0.25 * costBonus;
+    return 0.68 * strengthNorm + 0.32 * costScore;
   }
-  return -1 + 0.25 * costBonus;
+  return -1 + 0.32 * costScore;
 }
 
 export function upsertRecentModel(

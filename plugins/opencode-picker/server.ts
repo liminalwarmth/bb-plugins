@@ -5,6 +5,7 @@ import {
   buildPriceMaps,
   buildScoreMap,
   DEFAULT_BENCHMARK_URL,
+  isAnthropicOrOpenAiModel,
   OPENCODE_GO_MODELS_URL,
   OPENCODE_ZEN_MODELS_URL,
   parseBenchmarkPayload,
@@ -53,6 +54,7 @@ const pricedModelSchema = z.object({
 const pickerStateSchema = z.object({
   recent: z.array(recentModelSchema),
   recentCount: z.number().int().min(1).max(10),
+  hideAnthropicAndOpenAi: z.boolean(),
   scores: z.record(z.string(), scoredModelSchema),
   pricesByRoute: z.record(z.string(), pricedModelSchema),
   pricesByNorm: z.record(z.string(), pricedModelSchema),
@@ -105,6 +107,13 @@ export default async function plugin(bb: BbPluginApi) {
         "How many recently used OpenCode models to pin under Recent at the top of the picker.",
       experimental_schema: z.number().int().min(1).max(10),
       default: 4,
+    },
+    hideAnthropicAndOpenAi: {
+      type: "boolean",
+      label: "Hide Anthropic & OpenAI models",
+      description:
+        "Hide Claude and OpenAI models from the OpenCode picker so it focuses on OpenCode's other models.",
+      default: true,
     },
     benchmarkUrl: {
       type: "string",
@@ -473,20 +482,27 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   async function buildState(forceRefresh = false): Promise<PickerState> {
-    const [{ recentCount }, recent, benchmarks, pricing] = await Promise.all([
+    const [{ recentCount, hideAnthropicAndOpenAi }, recent, benchmarks, pricing] = await Promise.all([
       settings.get(),
       getMergedRecent(forceRefresh),
       ensureBenchmarks(forceRefresh),
       ensurePricing(forceRefresh),
     ]);
 
+    const filteredRecent = hideAnthropicAndOpenAi
+      ? recent.filter(
+          (item) => !isAnthropicOrOpenAiModel(item.displayName, item.routeProviderId, item.modelId),
+        )
+      : recent;
+
     const priceMaps = pricing
       ? buildPriceMaps(pricing.entries)
       : { byRoute: {}, byNorm: {} };
 
     return {
-      recent: recent.slice(0, recentCount),
+      recent: filteredRecent.slice(0, recentCount),
       recentCount,
+      hideAnthropicAndOpenAi,
       scores: benchmarks ? buildScoreMap(benchmarks.entries, benchmarks.maxScore) : {},
       pricesByRoute: priceMaps.byRoute,
       pricesByNorm: priceMaps.byNorm,
