@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import type { PickerState, rpcContract } from "./server";
 import {
+  computeModelSortWeight,
   COST_COLORS,
   COST_LABELS,
   lookupPrice,
@@ -28,6 +29,7 @@ import {
 const RECENT_CONTAINER_ATTR = "data-ocp-recent";
 const METRICS_ATTR = "data-ocp-metrics";
 const METRICS_KEY_ATTR = "data-ocp-metrics-key";
+const SORTED_LISTBOX_ATTR = "data-ocp-sorted";
 const BAR_HEIGHTS = [4, 6, 8, 10, 12] as const;
 
 function formatRate(value: number): string {
@@ -161,6 +163,17 @@ function getNativeOptions(listbox: Element): HTMLButtonElement[] {
 function cleanupDialog(dialog: Element) {
   dialog.querySelectorAll(`[${RECENT_CONTAINER_ATTR}]`).forEach((node) => node.remove());
   dialog.querySelectorAll(`[${METRICS_ATTR}]`).forEach((node) => node.remove());
+  const listbox = dialog.querySelector<HTMLElement>(`[${SORTED_LISTBOX_ATTR}]`);
+  if (listbox) {
+    listbox.removeAttribute(SORTED_LISTBOX_ATTR);
+    listbox.style.display = "";
+    listbox.style.flexDirection = "";
+    for (const child of listbox.children) {
+      if (child instanceof HTMLElement) {
+        child.style.order = "";
+      }
+    }
+  }
 }
 
 function createCheckSvg(selected: boolean): SVGSVGElement {
@@ -195,6 +208,13 @@ function decorateDialog(dialog: Element, state: PickerState) {
   }
 
   const nativeOptions = getNativeOptions(listbox);
+  const scoredOptions: Array<{
+    button: HTMLButtonElement;
+    displayName: string;
+    routeProviderId: string;
+    weight: number;
+    originalIndex: number;
+  }> = [];
   const optionByKey = new Map<
     string,
     {
@@ -207,7 +227,8 @@ function decorateDialog(dialog: Element, state: PickerState) {
     }
   >();
 
-  for (const button of nativeOptions) {
+  for (let index = 0; index < nativeOptions.length; index += 1) {
+    const button = nativeOptions[index];
     const titleSpan = button.querySelector("span[title]");
     const parsed = parseOptionTitle(titleSpan?.getAttribute("title"));
     if (!parsed) continue;
@@ -252,6 +273,41 @@ function decorateDialog(dialog: Element, state: PickerState) {
     if (!optionByKey.has(normKey)) {
       optionByKey.set(normKey, entryRecord);
     }
+
+    scoredOptions.push({
+      button,
+      displayName: parsed.displayName,
+      routeProviderId: parsed.routeProviderId,
+      weight: computeModelSortWeight(score, price, state.maxScore),
+      originalIndex: index,
+    });
+  }
+
+  if (listbox instanceof HTMLElement && scoredOptions.length > 0) {
+    listbox.setAttribute(SORTED_LISTBOX_ATTR, "true");
+    listbox.style.display = "flex";
+    listbox.style.flexDirection = "column";
+
+    for (const child of listbox.children) {
+      if (
+        child instanceof HTMLElement &&
+        !child.hasAttribute(RECENT_CONTAINER_ATTR) &&
+        child.getAttribute("role") !== "option"
+      ) {
+        child.style.order = "-1";
+      }
+    }
+
+    scoredOptions.sort((a, b) => {
+      if (b.weight !== a.weight) return b.weight - a.weight;
+      return a.originalIndex - b.originalIndex;
+    });
+    for (let rank = 0; rank < scoredOptions.length; rank += 1) {
+      const rankStr = String(rank);
+      if (scoredOptions[rank].button.style.order !== rankStr) {
+        scoredOptions[rank].button.style.order = rankStr;
+      }
+    }
   }
 
   const searchInput = dialog.querySelector<HTMLInputElement>('input[role="combobox"]');
@@ -295,6 +351,7 @@ function decorateDialog(dialog: Element, state: PickerState) {
   const container = document.createElement("div");
   container.setAttribute(RECENT_CONTAINER_ATTR, "true");
   container.setAttribute("data-ocp-sig", signature);
+  container.style.order = "-2";
   container.className = "mb-1 border-b border-border pb-1";
 
   const heading = document.createElement("div");

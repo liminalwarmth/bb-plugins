@@ -426,6 +426,19 @@ export function lookupPrice(
   return null;
 }
 
+export function computeModelSortWeight(
+  score: ScoredModel | null,
+  price: PricedModel | null,
+  maxScore: number,
+): number {
+  const costBonus = price ? (4 - price.tier) / 4 : 0.25;
+  if (score && maxScore > 0) {
+    const strengthNorm = Math.min(1, Math.max(0, score.index / maxScore));
+    return 0.75 * strengthNorm + 0.25 * costBonus;
+  }
+  return -1 + 0.25 * costBonus;
+}
+
 export function upsertRecentModel(
   current: RecentModel[],
   next: Omit<RecentModel, "key">,

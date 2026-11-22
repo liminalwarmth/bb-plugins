@@ -9,6 +9,7 @@ import {
   blendedCostToTier,
   buildPriceMaps,
   buildScoreMap,
+  computeModelSortWeight,
   goAllowancePctToTier,
   lookupPrice,
   lookupScore,
@@ -204,4 +205,31 @@ test("parseOpenCodeModelsPricing ranks Go models by monthly allowance burn and Z
   assert.equal(goAllowancePctToTier(20), 4);
   assert.equal(blendedCostToTier(0), 0);
   assert.equal(blendedCostToTier(16), 4);
+});
+
+test("computeModelSortWeight prioritizes strength while favoring lower cost", () => {
+  const strongMidCost = computeModelSortWeight(
+    { tier: 5, index: 61.4, aaName: "Gemini 4 Neon", creator: "Google" },
+    { tier: 3, label: "$$$", input: 3, output: 15, blended: 6, goMonthlyLimit: null, goAllowancePctPer1M: null },
+    64.6,
+  );
+  const strongHighCost = computeModelSortWeight(
+    { tier: 5, index: 64.6, aaName: "Claude Fable 5.2", creator: "Anthropic" },
+    { tier: 4, label: "$$$$", input: 8, output: 40, blended: 16, goMonthlyLimit: null, goAllowancePctPer1M: null },
+    64.6,
+  );
+  const capableFree = computeModelSortWeight(
+    { tier: 3, index: 32.6, aaName: "DeepSeek V4.1 Flash", creator: "DeepSeek" },
+    { tier: 0, label: "Free", input: 0, output: 0, blended: 0, goMonthlyLimit: null, goAllowancePctPer1M: null },
+    64.6,
+  );
+  const unrankedFree = computeModelSortWeight(
+    null,
+    { tier: 0, label: "Free", input: 0, output: 0, blended: 0, goMonthlyLimit: null, goAllowancePctPer1M: null },
+    64.6,
+  );
+
+  assert.ok(strongMidCost > strongHighCost);
+  assert.ok(strongHighCost > capableFree);
+  assert.ok(capableFree > unrankedFree);
 });
