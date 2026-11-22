@@ -4,6 +4,7 @@
   "name": "bb-plugins",
   "plugins": [
     { "name": "liminal-pool", "source": "./plugins/liminal-pool" },
-    { "name": "opencode-picker", "source": "./plugins/opencode-picker" }
+    { "name": "opencode-picker", "source": "./plugins/opencode-picker" },
+    { "name": "hotfixes", "source": "./plugins/hotfixes" }
   ]
 }
