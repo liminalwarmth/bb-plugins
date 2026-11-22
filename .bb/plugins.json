@@ -4,6 +4,7 @@
   "name": "bb-plugins",
   "plugins": [
     { "name": "document-review", "source": "./plugins/document-review" },
-    { "name": "liminal-pool", "source": "./plugins/liminal-pool" }
+    { "name": "liminal-pool", "source": "./plugins/liminal-pool" },
+    { "name": "opencode-picker", "source": "./plugins/opencode-picker" }
   ]
 }
