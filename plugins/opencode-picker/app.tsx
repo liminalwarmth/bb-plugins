@@ -102,7 +102,7 @@ function createMetricsElement(
   group.setAttribute(METRICS_ATTR, "true");
   group.setAttribute(METRICS_KEY_ATTR, key);
   group.style.display = "inline-flex";
-  group.style.alignItems = "center";
+  group.style.alignItems = "baseline";
   group.style.gap = "6px";
   group.style.flexShrink = "0";
   group.style.marginRight = "2px";
@@ -601,7 +601,7 @@ function SettingsSection() {
                     {item.displayName}{" "}
                     <span className="text-subtle-foreground">{item.routeProviderId}</span>
                   </span>
-                  <span className="inline-flex items-center gap-2 shrink-0">
+                  <span className="inline-flex items-baseline gap-2 shrink-0">
                     {price ? <CostBadge tier={price.tier} /> : null}
                     {score ? <StrengthLegendBars tier={score.tier} /> : null}
                   </span>
