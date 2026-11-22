@@ -7,7 +7,9 @@
 import { defineRpcContract, type BbPluginApi, type PluginTurnFailedEvent } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { claudeAvailability, readClaude, type Availability } from "./src/claude.ts";
-import { readCodex } from "./src/codex.ts";
+import { readCodex, type QueuedResets } from "./src/codex.ts";
+import { readAntigravity, readGrok, readOpenCodeGo, type SubscriptionReading } from "./src/subscriptions.ts";
+import { bbCodexHome } from "./src/codex-home.ts";
 import { namedAccount, readLiminal, type LiminalAccount, type LiminalCodexAccount, type LiminalSnapshot } from "./src/liminal.ts";
 import {
   ALLOWANCE_MARGIN_MS, RESUME_DELAYS, allowanceReturns, claudeAccountBoundModel, fallbackAvailability, fallbackBlocked,
@@ -16,9 +18,12 @@ import {
 } from "./src/policy.ts";
 
 const PROVIDER = "claude-code";
+const CODEX = "codex";
 const MANA_CHANGED = "mana-changed";
 const IDENTITY_TTL_MS = 5 * 60_000;
 const NEXT_THREAD = "next-thread";
+const CODEX_NEXT_THREAD = "codex-next-thread";
+const codexPickKey = (threadId: string | null) => threadId === null ? CODEX_NEXT_THREAD : `codex-thread:${threadId}`;
 // A new-thread pick goes to a thread whose first message arrives within this long of its creation.
 const NEW_THREAD_MS = 2 * 60_000;
 
@@ -30,8 +35,15 @@ interface ThreadState {
   waiting?: string;
 }
 
+const subscriptionProviders = ["antigravity", "grok", "opencode"] as const;
+const subscriptionUsage = {
+  antigravity: { label: "Antigravity", read: readAntigravity },
+  grok: { label: "Grok", read: readGrok },
+  opencode: { label: "OpenCode", read: readOpenCodeGo },
+} as const;
+
 const manaRowSchema = z.object({
-  provider: z.enum(["claude", "codex"]),
+  provider: z.enum(["claude", "codex", ...subscriptionProviders]),
   id: z.string(),
   label: z.string(),
   plan: z.string().nullable(),
@@ -43,10 +55,13 @@ const manaRowSchema = z.object({
   threads: z.number(),
   pinned: z.boolean(),
   left: z.number().nullable(),
-  pace: z.number().nullable(),
+  session: z.number().nullable(),
   countdown: z.string(),
+  resetsAt: z.string().nullable(),
   stale: z.boolean(),
-  windows: z.array(z.object({ label: z.string(), left: z.number(), resets: z.string() })),
+  windows: z.array(z.object({ label: z.string(), name: z.string(), left: z.number(), resets: z.string(), resetsAt: z.string().nullable() })),
+  queued: z.object({ available: z.number(), nextExpires: z.string() }).nullable(),
+  error: z.string().nullable(),
   checkedAt: z.string().nullable(),
 });
 export type ManaRow = z.infer<typeof manaRowSchema>;
@@ -64,6 +79,8 @@ export const rpcContract = defineRpcContract({
   refresh: { input: z.null(), output: manaSchema },
   picker: { input: pickerTarget, output: pickerSchema },
   choose: { input: pickerTarget.extend({ account: z.string().min(1).nullable() }), output: pickerSchema },
+  codexPicker: { input: pickerTarget, output: pickerSchema },
+  chooseCodex: { input: pickerTarget.extend({ account: z.string().min(1).nullable() }), output: pickerSchema },
 });
 // Provider Retry asks every source for this before it schedules a rate-limit retry (builtin provider-retry plugin).
 const retryAvailability = z.discriminatedUnion("kind", [
@@ -110,6 +127,9 @@ export default async function plugin(bb: BbPluginApi) {
   let liminal: LiminalSnapshot = { accounts: [], codex: [], excluded: new Map(), pinned: undefined };
   const refreshLiminal = async () => { liminal = readLiminal((await settings.get()).liminalDataDir); return liminal; };
   const account = (id: string | undefined) => liminal.accounts.find(item => item.id === id);
+  const codexAccount = (id: string | undefined) => liminal.codex.find(item => item.id === id);
+  const readCodexPick = (threadId: string | null) => bb.storage.kv.get<string>(codexPickKey(threadId));
+  const mainCodex = () => liminal.codex.find(item => item.main && !codexFolded(item));
 
   const identities = new Map<string, { at: number; value: Availability; plan: string | null }>();
   async function availability(item: LiminalAccount, refresh = false) {
@@ -192,6 +212,14 @@ export default async function plugin(bb: BbPluginApi) {
     return primaryHostId === null || hostId === primaryHostId;
   }
 
+  bb.providers.experimental_contributeEnv(CODEX, async ({ threadId, hostId }) => {
+    if (!(await onPrimaryHost(hostId))) return [];
+    await refreshLiminal();
+    const chosen = codexAccount(await readCodexPick(threadId)) ?? mainCodex();
+    if (!chosen) return [];
+    return [{ name: "CODEX_HOME", value: await bbCodexHome(chosen), reason: `Liminal account ${chosen.label}` }];
+  });
+
   bb.providers.experimental_contributeEnv(PROVIDER, async ({ threadId, hostId }) => {
     if (!(await settings.get()).routing || !(await onPrimaryHost(hostId))) return [];
     await refreshLiminal();
@@ -263,12 +291,61 @@ export default async function plugin(bb: BbPluginApi) {
     bb.realtime.publish(MANA_CHANGED, {});
     return picker(threadId);
   }
+
+  async function codexPicker(threadId: string | null): Promise<Picker> {
+    await refreshLiminal();
+    return { account: codexAccount(await readCodexPick(threadId))?.id ?? null, automatic: mainCodex()?.id ?? null };
+  }
+
+  async function chooseCodex(threadId: string | null, id: string | null): Promise<Picker> {
+    if (threadId !== null) {
+      const thread = await bb.sdk.threads.get({ threadId });
+      if (thread.providerId !== CODEX || !thread.environmentId) throw new Error("Choose a Codex account on a thread running on this Mac.");
+      const environment = await bb.sdk.environments.get({ environmentId: thread.environmentId });
+      if (!environment.hostId || !(await onPrimaryHost(environment.hostId))) {
+        throw new Error("Choose a Codex account on a thread running on this Mac.");
+      }
+    }
+    await refreshLiminal();
+    if (id === null) {
+      await bb.storage.kv.delete(codexPickKey(threadId));
+    } else {
+      const target = codexAccount(id);
+      if (!target || excludedReason(id)) throw new Error("That Codex account is unavailable in Liminal Tools.");
+      await bbCodexHome(target);
+      if (codexReads.get(id)?.signedIn !== true) await readCodexAccount(target);
+      if (codexReads.get(id)?.signedIn !== true) throw new Error(`${target.label} is signed out. Sign in from Liminal Tools.`);
+      await bb.storage.kv.set(codexPickKey(threadId), id);
+    }
+    bb.realtime.publish(MANA_CHANGED, {});
+    return codexPicker(threadId);
+  }
+
+  let assigningCodexPick = false;
+  async function assignNextCodex(threadId: string) {
+    if (assigningCodexPick) return;
+    assigningCodexPick = true;
+    try {
+      const next = await readCodexPick(null);
+      if (!next || await readCodexPick(threadId)) return;
+      await bb.storage.kv.delete(CODEX_NEXT_THREAD);
+      await bb.storage.kv.set(codexPickKey(threadId), next);
+      bb.realtime.publish(MANA_CHANGED, {});
+    } finally {
+      assigningCodexPick = false;
+    }
+  }
   // The new-thread composer's pick goes to the Claude Code thread the user starts next: its first message, by a person,
   // before the provider launches. Never blocks a message.
   bb.experimental_hooks.on("message.dispatch", async ctx => {
     try {
       if (ctx.attempt !== "start-turn" || ctx.initiator !== "user" || ctx.senderThreadId !== null) return { action: "proceed" };
-      if (ctx.requestedExecution.providerId !== PROVIDER || Date.now() - ctx.thread.createdAt > NEW_THREAD_MS) return { action: "proceed" };
+      if (Date.now() - ctx.thread.createdAt > NEW_THREAD_MS) return { action: "proceed" };
+      if (ctx.requestedExecution.providerId === CODEX) {
+        if (ctx.host && await onPrimaryHost(ctx.host.id)) await assignNextCodex(ctx.thread.id);
+        return { action: "proceed" };
+      }
+      if (ctx.requestedExecution.providerId !== PROVIDER) return { action: "proceed" };
       const next = await readNext();
       if (!next || (await readThread(ctx.thread.id))) return { action: "proceed" };
       if (!(await settings.get()).routing || (ctx.host && !(await onPrimaryHost(ctx.host.id)))) return { action: "proceed" };
@@ -376,7 +453,10 @@ export default async function plugin(bb: BbPluginApi) {
     const state = await readThread(thread.id);
     if (state?.autoResume || state?.waiting) { delete state.autoResume; delete state.waiting; await writeThread(thread.id, state); }
   });
-  bb.events.on("thread.deleted", async ({ thread }) => { await bb.storage.kv.delete(threadKey(thread.id)); });
+  bb.events.on("thread.deleted", async ({ thread }) => {
+    await bb.storage.kv.delete(threadKey(thread.id));
+    await bb.storage.kv.delete(codexPickKey(thread.id));
+  });
 
   // Liminal owns rate-limit retries for the threads it routes; Provider Retry still handles overloads.
   bb.rpc.register(retryContract, {
@@ -394,8 +474,7 @@ export default async function plugin(bb: BbPluginApi) {
         : null;
     } catch { return null; }
   }
-  // Codex logins are shown, never routed: bb's Codex provider runs every thread on this Mac's own ~/.codex login.
-  const codexReads = new Map<string, { at: number; signedIn: boolean | null; email: string | null; plan: string | null; value: ProviderUsage }>();
+  const codexReads = new Map<string, { at: number; signedIn: boolean | null; email: string | null; plan: string | null; resets?: QueuedResets | null; value: ProviderUsage }>();
   const codexPending = new Map<string, Promise<void>>();
   function readCodexAccount(item: LiminalCodexAccount) {
     const active = codexPending.get(item.id);
@@ -404,11 +483,11 @@ export default async function plugin(bb: BbPluginApi) {
       const last = codexReads.get(item.id);
       try {
         const read = await readCodex(item.home);
-        codexReads.set(item.id, { at: Date.now(), signedIn: read.signedIn, email: read.email, plan: read.plan,
+        codexReads.set(item.id, { at: Date.now(), signedIn: read.signedIn, email: read.email, plan: read.plan, resets: read.resets ?? null,
           value: { provider: "codex", account: item.id, windows: read.windows, checkedAt: new Date().toISOString(),
             ...(read.signedIn && !read.windows.length ? { error: "Plan usage is unavailable for this login." } : {}) } });
       } catch {
-        codexReads.set(item.id, { at: Date.now(), signedIn: last?.signedIn ?? null, email: last?.email ?? null, plan: last?.plan ?? null,
+        codexReads.set(item.id, { at: Date.now(), signedIn: last?.signedIn ?? null, email: last?.email ?? null, plan: last?.plan ?? null, resets: last?.resets ?? null,
           value: { provider: "codex", account: item.id, windows: last?.value.windows || [], checkedAt: last?.value.checkedAt || null, stale: true, error: "Could not refresh plan usage." } });
       }
       bb.realtime.publish(MANA_CHANGED, { account: item.id });
@@ -429,7 +508,7 @@ export default async function plugin(bb: BbPluginApi) {
     const minutes = window.durationMinutes;
     return minutes === undefined ? "LIMIT" : minutes % 1440 === 0 ? `${minutes / 1440}D` : minutes % 60 === 0 ? `${minutes / 60}H` : `${minutes}M`;
   }
-  function manaRow(provider: "claude" | "codex", item: { id: string; label: string }, value: ProviderUsage | undefined, identity: Availability, plan: string | null, threads: number, note: string | null, now: number): ManaRow {
+  function manaRow(provider: ManaRow["provider"], item: { id: string; label: string }, value: ProviderUsage | undefined, identity: Availability, plan: string | null, threads: number, note: string | null, now: number, queued: QueuedResets | null = null): ManaRow {
     const shown = manaWeek(value, now), reason = excludedReason(item.id) ?? null;
     const weekly = tightest(value?.windows, 10080), session = tightest(value?.windows, 300);
     const spentWindow = [weekly, session].filter((window): window is NonNullable<typeof window> => Boolean(window) && window!.remaining <= 0)
@@ -449,12 +528,17 @@ export default async function plugin(bb: BbPluginApi) {
       provider, id: item.id, label: item.label, plan, status, statusLabel, reason, note,
       slots: slots.length ? slots : [{ key: "week", label: "7D", left: null }],
       threads, pinned: provider === "claude" && liminal.pinned === item.id,
-      left: shown?.left ?? null, pace: shown?.pace ?? null, countdown: shown?.countdown ?? "",
-      stale: usageStale(value, now),
-      windows: (value?.windows || []).map(window => ({ label: usageShortLabel(window), left: Math.round(window.remaining), resets: window.resetsAt ? resetIn(window, now) : "" })),
+      left: shown?.left ?? null, session: session ? Math.round(session.remaining) : null,
+      countdown: shown?.countdown ?? "", resetsAt: weekly?.resetsAt ?? null,
+      stale: usageStale(value && { ...value, refreshIntervalMs: usageRefreshInterval(true) }, now),
+      windows: [...(value?.windows || [])].sort((a, b) => (a.durationMinutes ?? Infinity) - (b.durationMinutes ?? Infinity) || Number(b.shared) - Number(a.shared))
+        .map(window => ({ label: usageShortLabel(window), name: window.name, left: Math.round(window.remaining), resets: window.resetsAt ? resetIn(window, now) : "", resetsAt: window.resetsAt ?? null })),
+      queued: queued ? { available: queued.available, nextExpires: queued.nextExpiresAt ? resetIn({ resetsAt: queued.nextExpiresAt }, now) : "" } : null,
+      error: value?.error ?? null,
       checkedAt: value?.checkedAt ?? null,
     };
   }
+  const subscriptions = new Map<typeof subscriptionProviders[number], { at: number; value: SubscriptionReading | null; checkedAt: string | null; error: string | undefined }>();
   async function mana(): Promise<Mana> {
     await refreshLiminal();
     const now = Date.now(), threads = await routedThreads();
@@ -466,14 +550,22 @@ export default async function plugin(bb: BbPluginApi) {
     const codexRows = liminal.codex.filter(item => !codexFolded(item)).map(item => {
       const read = codexReads.get(item.id);
       return manaRow("codex", item, read?.value, read?.signedIn === true ? "signed-in" : read?.signedIn === false ? "signed-out" : "unknown", read?.plan ?? null,
-        0, item.main ? "This Mac's login · bb's Codex threads use it" : null, now);
+        0, item.main ? "This Mac's primary Codex login" : null, now, read?.resets ?? null);
     });
-    return { rows: [...claudeRows, ...codexRows], error: liminal.error ?? null, routing: (await settings.get()).routing, conflict: await conflict() };
+    const subscriptionRows = subscriptionProviders.flatMap(provider => {
+      const read = subscriptions.get(provider);
+      if (!read?.value) return [];
+      const value: ProviderUsage = { provider, windows: read.value.windows, checkedAt: read.checkedAt, stale: Boolean(read.error), error: read.error };
+      return [manaRow(provider, { id: provider, label: subscriptionUsage[provider].label }, value, "signed-in", read.value.plan, 0, null, now)];
+    });
+    return { rows: [...claudeRows, ...codexRows, ...subscriptionRows], error: liminal.error ?? null, routing: (await settings.get()).routing, conflict: await conflict() };
   }
   async function refreshAll(force: boolean) {
     await refreshLiminal();
     const running = new Set((await bb.sdk.threads.listRunning()).map(row => row.id));
     const active = new Set((await routedThreads()).filter(row => running.has(row.threadId)).map(row => row.state.account));
+    const runningProviders = await Promise.all([...running].map(threadId => bb.sdk.threads.get({ threadId }).then(thread => thread.providerId, () => "")));
+    const subscriptionInUse = (provider: string) => runningProviders.some(id => id.includes(provider));
     await Promise.all([
       ...liminal.accounts.filter(item => !excludedReason(item.id)).map(async item => {
         if (await availability(item, force) !== "signed-in") return;
@@ -486,10 +578,23 @@ export default async function plugin(bb: BbPluginApi) {
         const age = Date.now() - (codexReads.get(item.id)?.at ?? 0);
         if (force || age >= usageRefreshInterval(true)) await readCodexAccount(item);
       }),
+      ...subscriptionProviders.map(async provider => {
+        const last = subscriptions.get(provider);
+        if (!force && last && Date.now() - last.at < usageRefreshInterval(!subscriptionInUse(provider))) return;
+        const at = Date.now();
+        try {
+          const value = await subscriptionUsage[provider].read();
+          subscriptions.set(provider, { at, value, checkedAt: new Date(at).toISOString(), error: undefined });
+        } catch (cause) {
+          subscriptions.set(provider, { at, value: last?.value ?? null, checkedAt: last?.checkedAt ?? null, error: cause instanceof Error ? cause.message : String(cause) });
+        }
+      }),
     ]);
     bb.realtime.publish(MANA_CHANGED, {});
   }
   bb.rpc.register(rpcContract, {
+    codexPicker: ({ threadId }) => codexPicker(threadId),
+    chooseCodex: ({ threadId, account: id }) => chooseCodex(threadId, id),
     mana: () => mana(),
     refresh: async () => { await refreshAll(true); return mana(); },
     picker: ({ threadId }) => picker(threadId),
@@ -508,16 +613,11 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   // ── CLI ────────────────────────────────────────────────────────────────────────────────────────────────────────
-  const bar = (left: number | null, pace: number | null) => {
-    if (left === null) return "·".repeat(20);
-    const cells: string[] = Array.from({ length: 20 }, (_, index) => (index < Math.round(left / 5) ? "█" : "░"));
-    if (pace !== null) cells[Math.min(19, Math.round(pace / 5))] = "│";
-    return cells.join("");
-  };
+  const bar = (left: number | null) => left === null ? "·".repeat(20) : "█".repeat(Math.round(left / 5)).padEnd(20, "░");
   function renderMana(value: Mana) {
     const width = Math.max(5, ...value.rows.map(row => row.label.length));
     const lines = value.rows.map(row => {
-      const head = `${row.label.padEnd(width)}  ${bar(row.left, row.pace)}  ${row.left === null ? "  —" : `${String(row.left).padStart(3)}%`}  ${row.countdown.padStart(6)}`;
+      const head = `${row.label.padEnd(width)}  ${bar(row.left)}  ${row.left === null ? "  —" : `${String(row.left).padStart(3)}%`}  ${row.countdown.padStart(6)}`;
       const notes = [row.provider === "codex" ? "Codex" : "", row.plan ?? "", row.pinned ? "pinned" : "", row.status === "exhausted" ? row.statusLabel : "", row.note ?? "", row.threads ? `${row.threads} thread${row.threads === 1 ? "" : "s"}` : "", row.stale ? "stale" : "", row.reason ?? ""].filter(Boolean);
       const windows = row.windows.map(window => `${window.label} ${window.left}% left${window.resets ? ` · ${window.resets}` : ""}`).join("   ");
       return `${head}${notes.length ? `  (${notes.join(", ")})` : ""}${windows ? `\n${" ".repeat(width + 2)}${windows}` : ""}`;
@@ -536,6 +636,7 @@ export default async function plugin(bb: BbPluginApi) {
       { name: "status", summary: "Mana Bar: weekly allowance left per Liminal account, counting down to each reset", usage: "bb liminal-pool status [--refresh] [--json]" },
       { name: "thread", summary: "Which Liminal account a thread runs on, and its exhaustion markers", usage: "bb liminal-pool thread [<thread-id>] [--json]" },
       { name: "switch", summary: "Move a thread to a named Liminal account from its next turn", usage: "bb liminal-pool switch <label-or-id> [--thread <thread-id>]" },
+      { name: "codex", summary: "Show or choose a BB thread's Codex account", usage: "bb liminal-pool codex [<label-or-id>] [--thread <thread-id>] [--json]" },
     ],
     async run(argv, ctx) {
       const json = argv.includes("--json");
@@ -567,7 +668,22 @@ export default async function plugin(bb: BbPluginApi) {
           const target = await assignThread(threadId, namedAccount(liminal.accounts, name).id);
           return out({ threadId, account: target.id, label: target.label }, `Thread ${threadId} runs on ${target.label} from its next turn.`);
         }
-        return { exitCode: 1, stderr: `Unknown command "${command}". Try: bb liminal-pool status | thread | switch` };
+        if (command === "codex") {
+          const flag = rest.indexOf("--thread");
+          const threadId = (flag >= 0 ? rest[flag + 1] : ctx.threadId) ?? null;
+          if (flag >= 0 && !rest[flag + 1]) throw new Error("Supply a thread ID after --thread.");
+          const name = rest.find((arg, index) => !arg.startsWith("--") && (flag < 0 || index !== flag + 1));
+          await refreshLiminal();
+          if (name) {
+            const target = namedAccount(liminal.codex, name, "Codex");
+            await chooseCodex(threadId, target.id);
+          }
+          const pick = await codexPicker(threadId);
+          const active = pick.account ?? pick.automatic, label = codexAccount(active ?? undefined)?.label ?? null;
+          return out({ threadId, active, label, accounts: liminal.codex.map(item => ({ id: item.id, label: item.label, main: item.main })) },
+            [`BB Codex account for ${threadId ?? "the next thread"}: ${label ?? "this Mac's primary login"}.`, ...liminal.codex.map(item => `  ${item.id === active ? "●" : "○"} ${item.label}${item.main ? " (Main)" : ""}`)].join("\n"));
+        }
+        return { exitCode: 1, stderr: `Unknown command "${command}". Try: bb liminal-pool status | thread | switch | codex` };
       } catch (error) {
         return { exitCode: 1, stderr: (error as Error).message };
       }

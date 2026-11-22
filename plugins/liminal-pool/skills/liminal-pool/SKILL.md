@@ -1,6 +1,6 @@
 ---
 name: liminal-pool
-description: "Inspect which Liminal Tools Claude account a bb thread runs on, read each account's allowance left (Mana Bar), or move a thread to a named account."
+description: "Inspect which Liminal Tools Claude account a bb thread runs on, read each account's allowance left (Mana Bar), move a thread to a named account, or choose a Liminal Codex login for a BB thread."
 ---
 
 # Liminal Pool
@@ -12,12 +12,15 @@ records and never writes them; sign-ins, renames, Connections switches and worke
 changed in Liminal Tools.
 
 ```sh
-bb liminal-pool status [--refresh] [--json]   # Mana Bar: weekly allowance LEFT, even-pace tick, reset countdown
+bb liminal-pool status [--refresh] [--json]   # Mana Bar: weekly allowance LEFT, reset countdown
 bb liminal-pool thread [<thread-id>] [--json] # the thread's account, exhaustion markers, and any wait
 bb liminal-pool switch <label-or-id> [--thread <thread-id>]  # from the thread's next turn
+bb liminal-pool codex [<label-or-id>] [--thread <thread-id>] [--json]  # show or choose a BB thread's Codex login
 ```
 
 Allowance is always reported as what is left, counting down to the reset, never as usage.
+Antigravity reads quota through the local Antigravity CLI's `/usage` command using its existing login.
+The row shows the shared Gemini quota. Hover to see the separate Argon weekly quota when reported.
 
 Policy (Liminal's own):
 
@@ -36,7 +39,10 @@ Policy (Liminal's own):
 
 The composer's account picker does the same as `switch` for an open thread. In the New Thread
 composer it remembers one pick for the next Claude Code thread the user starts (its first message
-within two minutes of creation); Automatic clears it. Codex accounts are listed but not pickable:
-bb's Codex provider ignores a plugin's `CODEX_HOME`, so every Codex thread uses `~/.codex`.
+within two minutes of creation); Automatic clears it.
+
+The Codex picker applies to a BB thread on this Mac from its next turn. In the New Thread
+composer it selects the account for the next Codex thread. Automatic uses the primary login.
+Secondary logins stay in their Liminal account homes. Sign in to added accounts from Liminal Tools.
 
 Do not switch a thread's account or change plugin settings unless the user asks.

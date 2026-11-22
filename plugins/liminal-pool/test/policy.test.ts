@@ -80,10 +80,9 @@ test("Sonnet 5.5 thinking is account-bound", () => {
   assert.equal(claudeAccountBoundModel("claude-opus-5-5"), false);
 });
 
-test("the Mana Bar counts allowance down, with an even-pace tick and a reset countdown", () => {
+test("the Mana Bar counts allowance down with a reset countdown", () => {
   const shown = manaWeek(claude(0, 24, hours(84)), NOW)!;
   assert.equal(shown.left, 76);
-  assert.equal(shown.pace, 50);
   assert.equal(shown.countdown, "3d12h");
   assert.equal(resetIn({ resetsAt: hours(0.5) }, NOW), "30m");
 });

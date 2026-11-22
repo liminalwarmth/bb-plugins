@@ -123,11 +123,11 @@ export function readLiminal(dataDir: string): LiminalSnapshot {
 }
 
 /** An account named by its id or by its label, in any case (account-preference.mts `namedAccount`). */
-export function namedAccount(accounts: LiminalAccount[], value: string) {
+export function namedAccount<T extends { id: string; label: string }>(accounts: T[], value: string, provider = "Claude") {
   const direct = accounts.find(item => item.id === value);
   if (direct) return direct;
   const matches = accounts.filter(item => item.label.toLocaleLowerCase() === value.trim().toLocaleLowerCase());
   if (matches.length === 1) return matches[0];
-  if (matches.length > 1) throw new Error(`“${value}” matches several Claude accounts. Use an account ID.`);
-  throw new Error(`Unknown Claude account “${value}”. Run \`bb liminal-pool status\` for labels.`);
+  if (matches.length > 1) throw new Error(`“${value}” matches several ${provider} accounts. Use an account ID.`);
+  throw new Error(`Unknown ${provider} account “${value}”. Run \`bb liminal-pool status\` for labels.`);
 }

@@ -18,7 +18,7 @@ export interface ExhaustionMarker { exhaustedAt: string; resetsAt?: string | nul
 // Plan allowance. Idle logins get a reset check every fifteen minutes; active logins refresh each minute.
 export const usageRefreshInterval = (resting = false) => resting ? 15 * 60_000 : 60_000;
 
-const duration = (minutes?: number) => minutes === 300 ? '5-hour' : minutes === 10080 ? 'Weekly' : `${minutes}-minute`;
+const duration = (minutes?: number) => minutes === 300 ? '5-hour' : minutes === 10080 ? 'Weekly' : minutes === 43200 ? 'Monthly' : `${minutes}-minute`;
 // One window of a provider's allowance from the percentage used. `shared` marks the account-wide bucket; other buckets
 // limit particular models. A reading without a number is no window.
 export const usageWindow = (bucket: string, scope: string, minutes: number | undefined, used: number | null | undefined, resetsAt: string | null | undefined, shared: boolean): UsageWindow[] =>
@@ -164,14 +164,12 @@ export function usageShortLabel(item: UsageWindow) {
 }
 
 // plugins/development/allowance/apps/allowance/widget/Mana.svelte: the shared weekly window that binds the account
-// (the lowest when a provider reports more than one), its allowance left, an even-pace tick and the reset countdown.
+// (the lowest when a provider reports more than one), its allowance left and the reset countdown.
 const WEEK = 7 * 24 * 60;
 export function manaWeek(value: ProviderUsage | undefined, now = Date.now()) {
   const item = (value?.windows || []).filter(window => window.shared && window.durationMinutes === WEEK && Number.isFinite(window.remaining))
     .sort((a, b) => a.remaining - b.remaining)[0];
   if (!item) return undefined;
   const left = Math.round(Math.max(0, Math.min(100, item.remaining))), reset = Date.parse(item.resetsAt!);
-  // Where the fill would sit if the week were spent evenly: the share of the window still to run, left out at either end where it says nothing.
-  const pace = Math.round((reset - now) / (WEEK * 600));
-  return { left, pace: pace > 1 && pace < 99 ? pace : undefined, countdown: Number.isFinite(reset) ? resetIn(item, now) : '' };
+  return { left, countdown: Number.isFinite(reset) ? resetIn(item, now) : '' };
 }
