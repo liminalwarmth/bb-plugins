@@ -44,8 +44,10 @@ function createCostBadgeElement(price: PricedModel): HTMLSpanElement {
   );
   badge.title =
     price.tier === 0
-      ? "Free · $0/1M tokens (models.dev)"
-      : `Cost ${price.label} · ${formatRate(price.blended)}/1M blended (${formatRate(price.input)} in / ${formatRate(price.output)} out · models.dev)`;
+      ? "Free · $0/1M tokens (opencode.ai)"
+      : price.goAllowancePctPer1M !== null && price.goMonthlyLimit !== null
+        ? `Go usage ${price.label} · ${price.goAllowancePctPer1M}% of monthly Go allowance / 1M blended (${formatRate(price.blended)}/1M on $${price.goMonthlyLimit} cap · ${formatRate(price.input)} in / ${formatRate(price.output)} out · opencode.ai)`
+        : `OpenCode ${price.label} · ${formatRate(price.blended)}/1M blended (${formatRate(price.input)} in / ${formatRate(price.output)} out · opencode.ai)`;
 
   badge.style.fontSize = "10px";
   badge.style.lineHeight = "1";
@@ -532,9 +534,9 @@ function SettingsSection() {
             <UrlLink href="https://artificialanalysis.ai/" className="underline">
               Artificial Analysis
             </UrlLink>{" "}
-            (Intelligence Index v5) · Pricing from{" "}
-            <UrlLink href="https://models.dev/" className="underline">
-              models.dev
+            (Intelligence Index v5) · Pricing & Go allowance caps from{" "}
+            <UrlLink href="https://opencode.ai/docs/go" className="underline">
+              opencode.ai
             </UrlLink>
             .
           </div>
@@ -626,7 +628,7 @@ export default definePluginApp((app) => {
     id: "opencode-picker-status",
     title: "Status & recent models",
     description:
-      "Cached Artificial Analysis strength ratings, models.dev relative pricing, and the most recent models actually run through OpenCode.",
+      "Cached Artificial Analysis strength ratings, official OpenCode Zen & Go allowance pricing, and the most recent models actually run through OpenCode.",
     component: SettingsSection,
   });
 });

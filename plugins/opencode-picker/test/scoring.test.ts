@@ -9,11 +9,12 @@ import {
   blendedCostToTier,
   buildPriceMaps,
   buildScoreMap,
+  goAllowancePctToTier,
   lookupPrice,
   lookupScore,
   normalizeModelName,
   parseBenchmarkPayload,
-  parseModelsDevPricing,
+  parseOpenCodeModelsPricing,
   parseOptionTitle,
   scoreToTier,
   upsertRecentModel,
@@ -126,30 +127,81 @@ test("readOpenCodeDbRecentModels reads only assistant turns ordered by most rece
   }
 });
 
-test("parseModelsDevPricing and lookupPrice resolve route-specific and fallback cost tiers", () => {
-  const entries = parseModelsDevPricing({
-    opencode: {
-      models: {
-        "glm-5.3": { name: "GLM-5.3", cost: { input: 0.56, output: 1.76 } },
-        "claude-fable-5-2": { name: "Claude Fable 5.2", cost: { input: 8, output: 40 } },
-        "beam-free": { name: "Beam Free", cost: { input: 0, output: 0 } },
-      },
+test("parseOpenCodeModelsPricing ranks Go models by monthly allowance burn and Zen by blended rate", () => {
+  const zenEntries = parseOpenCodeModelsPricing(
+    {
+      data: [
+        {
+          id: "glm-5.3",
+          name: "GLM-5.3",
+          type: "chat",
+          cost: { text: { input: { price: 0.56 }, output: { price: 1.76 } } },
+        },
+        {
+          id: "claude-fable-5-2",
+          name: "Claude Fable 5.2",
+          type: "chat",
+          cost: { text: { input: { price: 8 }, output: { price: 40 } } },
+        },
+        {
+          id: "beam-free",
+          name: "Beam Free",
+          type: "chat",
+          cost: { text: { input: { price: 0 }, output: { price: 0 } } },
+        },
+      ],
     },
-    "opencode-go": {
-      models: {
-        "glm-5.3": { name: "GLM-5.3", cost: { input: 1.4, output: 4.4 } },
-      },
+    "opencode",
+  );
+  const goEntries = parseOpenCodeModelsPricing(
+    {
+      data: [
+        {
+          id: "glm-5.3",
+          name: "GLM-5.3",
+          type: "chat",
+          cost: { text: { input: { price: 1.4 }, output: { price: 4.4 } } },
+          go: { monthly_usage: { go: 200 } },
+        },
+        {
+          id: "deepseek-v4-pro",
+          name: "DeepSeek V4 Pro",
+          type: "chat",
+          cost: { text: { input: { price: 0.66 }, output: { price: 1.98 } } },
+          go: { monthly_usage: { go: 15 } },
+        },
+        {
+          id: "deepseek-v4.1-flash",
+          name: "DeepSeek V4.1 Flash 1017",
+          type: "chat",
+          cost: { text: { input: { price: 0.15 }, output: { price: 0.6 } } },
+          go: { monthly_usage: { go: 100 } },
+        },
+        {
+          id: "kimi-k3",
+          name: "Kimi K3",
+          type: "chat",
+          cost: { text: { input: { price: 3 }, output: { price: 15 } } },
+          go: { monthly_usage: { go: 15 } },
+        },
+      ],
     },
-  });
+    "opencode-go",
+  );
 
-  const { byRoute, byNorm } = buildPriceMaps(entries);
+  const { byRoute, byNorm } = buildPriceMaps([...zenEntries, ...goEntries]);
   assert.equal(lookupPrice(byRoute, byNorm, "GLM-5.3", "opencode")?.label, "$");
   assert.equal(lookupPrice(byRoute, byNorm, "GLM-5.3", "opencode-go")?.label, "$$");
+  assert.equal(lookupPrice(byRoute, byNorm, "GLM-5.3", "opencode-go")?.goAllowancePctPer1M, 1.07);
+  assert.equal(lookupPrice(byRoute, byNorm, "DeepSeek V4 Pro", "opencode-go")?.label, "$$$");
+  assert.equal(lookupPrice(byRoute, byNorm, "DeepSeek V4.1 Flash 1017", "opencode-go")?.label, "$");
+  assert.equal(lookupPrice(byRoute, byNorm, "Kimi K3", "opencode-go")?.label, "$$$$");
   assert.equal(lookupPrice(byRoute, byNorm, "Fable 5.2", "claude-agent")?.label, "$$$$");
   assert.equal(lookupPrice(byRoute, byNorm, "Beam Free", "opencode")?.label, "Free");
+  assert.equal(goAllowancePctToTier(0.26), 1);
+  assert.equal(goAllowancePctToTier(1.08), 2);
+  assert.equal(goAllowancePctToTier(6.6), 3);
+  assert.equal(goAllowancePctToTier(20), 4);
   assert.equal(blendedCostToTier(0), 0);
-  assert.equal(blendedCostToTier(0.5), 1);
-  assert.equal(blendedCostToTier(2.15), 2);
-  assert.equal(blendedCostToTier(6), 3);
   assert.equal(blendedCostToTier(16), 4);
 });

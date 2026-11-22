@@ -23,6 +23,8 @@ export interface RawPriceEntry {
   input: number;
   output: number;
   blended: number;
+  goMonthlyLimit: number | null;
+  goAllowancePctPer1M: number | null;
 }
 
 export interface PricedModel {
@@ -31,6 +33,8 @@ export interface PricedModel {
   input: number;
   output: number;
   blended: number;
+  goMonthlyLimit: number | null;
+  goAllowancePctPer1M: number | null;
 }
 
 export interface RecentModel {
@@ -84,7 +88,8 @@ export const COST_COLORS: Record<CostTier, string> = {
 export const DEFAULT_BENCHMARK_URL =
   "https://raw.githubusercontent.com/terryds/bestvaluemodel/main/data/models.json";
 
-export const DEFAULT_PRICING_URL = "https://models.dev/api.json";
+export const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/inference/v1/models";
+export const OPENCODE_GO_MODELS_URL = "https://opencode.ai/inference/go/v1/models";
 
 export const OPENCODE_ROUTE_PROVIDERS = new Set([
   "claude-agent",
@@ -92,8 +97,6 @@ export const OPENCODE_ROUTE_PROVIDERS = new Set([
   "opencode",
   "opencode-go",
 ]);
-
-const MODELS_DEV_PROVIDERS = ["opencode", "opencode-go", "openai", "anthropic"] as const;
 
 export function normalizeModelName(raw: string): string {
   let text = raw
@@ -153,6 +156,14 @@ export function blendedCostToTier(blended: number): CostTier {
   if (blended < 1) return 1;
   if (blended < 3.5) return 2;
   if (blended < 10) return 3;
+  return 4;
+}
+
+export function goAllowancePctToTier(pctPer1M: number): CostTier {
+  if (!Number.isFinite(pctPer1M) || pctPer1M <= 0) return 0;
+  if (pctPer1M < 1) return 1;
+  if (pctPer1M < 5) return 2;
+  if (pctPer1M < 16) return 3;
   return 4;
 }
 
@@ -231,48 +242,85 @@ export function parseBenchmarkPayload(payload: unknown): ParsedBenchmarkDataset 
   };
 }
 
-export function parseModelsDevPricing(payload: unknown): RawPriceEntry[] {
-  if (!payload || typeof payload !== "object") return [];
-  const root = payload as Record<string, unknown>;
+export function parseOpenCodeModelsPricing(
+  payload: unknown,
+  routeProviderId: "opencode" | "opencode-go",
+): RawPriceEntry[] {
+  const root =
+    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+  const data = Array.isArray(root?.data) ? root.data : [];
   const entries: RawPriceEntry[] = [];
 
-  for (const providerKey of MODELS_DEV_PROVIDERS) {
-    const provider = root[providerKey];
-    if (!provider || typeof provider !== "object") continue;
-    const models = (provider as Record<string, unknown>).models;
-    if (!models || typeof models !== "object") continue;
+  for (const item of data) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record.type === "string" && record.type !== "chat") continue;
 
-    const routeProviderId = providerKey === "anthropic" ? "claude-agent" : providerKey;
+    const slug = typeof record.id === "string" ? record.id.trim() : "";
+    if (!slug) continue;
 
-    for (const [slug, rawModel] of Object.entries(models as Record<string, unknown>)) {
-      if (!rawModel || typeof rawModel !== "object") continue;
-      const model = rawModel as Record<string, unknown>;
-      const cost = model.cost && typeof model.cost === "object"
-        ? (model.cost as Record<string, unknown>)
+    const cost = record.cost && typeof record.cost === "object"
+      ? (record.cost as Record<string, unknown>)
+      : null;
+    const textCost = cost?.text && typeof cost.text === "object"
+      ? (cost.text as Record<string, unknown>)
+      : null;
+    const inputObj = textCost?.input && typeof textCost.input === "object"
+      ? (textCost.input as Record<string, unknown>)
+      : null;
+    const outputObj = textCost?.output && typeof textCost.output === "object"
+      ? (textCost.output as Record<string, unknown>)
+      : null;
+
+    const input =
+      typeof inputObj?.price === "number" && Number.isFinite(inputObj.price)
+        ? inputObj.price
         : null;
-      if (!cost) continue;
+    const output =
+      typeof outputObj?.price === "number" && Number.isFinite(outputObj.price)
+        ? outputObj.price
+        : null;
+    if (input === null && output === null) continue;
 
-      const input = typeof cost.input === "number" && Number.isFinite(cost.input) ? cost.input : null;
-      const output =
-        typeof cost.output === "number" && Number.isFinite(cost.output) ? cost.output : null;
-      if (input === null && output === null) continue;
+    const inRate = input ?? 0;
+    const outRate = output ?? 0;
+    const blended = Math.round(((3 * inRate + outRate) / 4) * 100) / 100;
 
-      const inRate = input ?? 0;
-      const outRate = output ?? 0;
-      const blended = Math.round(((3 * inRate + outRate) / 4) * 100) / 100;
-      const displayName = typeof model.name === "string" && model.name.trim() ? model.name.trim() : slug;
-      const normKey = normalizeModelName(displayName) || normalizeModelName(slug);
+    const goObj = record.go && typeof record.go === "object"
+      ? (record.go as Record<string, unknown>)
+      : null;
+    const monthlyUsage = goObj?.monthly_usage && typeof goObj.monthly_usage === "object"
+      ? (goObj.monthly_usage as Record<string, unknown>)
+      : null;
+    const goMonthlyLimit =
+      routeProviderId === "opencode-go" &&
+      typeof monthlyUsage?.go === "number" &&
+      Number.isFinite(monthlyUsage.go) &&
+      monthlyUsage.go > 0
+        ? monthlyUsage.go
+        : null;
+    const goAllowancePctPer1M =
+      goMonthlyLimit !== null && blended > 0
+        ? Math.round((blended / goMonthlyLimit) * 10_000) / 100
+        : goMonthlyLimit !== null && blended === 0
+          ? 0
+          : null;
 
-      entries.push({
-        routeProviderId,
-        modelSlug: slug,
-        displayName,
-        normKey,
-        input: Math.round(inRate * 1000) / 1000,
-        output: Math.round(outRate * 1000) / 1000,
-        blended,
-      });
-    }
+    const displayName =
+      typeof record.name === "string" && record.name.trim() ? record.name.trim() : slug;
+    const normKey = normalizeModelName(displayName) || normalizeModelName(slug);
+
+    entries.push({
+      routeProviderId,
+      modelSlug: slug,
+      displayName,
+      normKey,
+      input: Math.round(inRate * 1000) / 1000,
+      output: Math.round(outRate * 1000) / 1000,
+      blended,
+      goMonthlyLimit,
+      goAllowancePctPer1M,
+    });
   }
 
   return entries;
@@ -302,13 +350,18 @@ export function buildPriceMaps(entries: RawPriceEntry[]): {
   const byNorm: Record<string, PricedModel> = {};
 
   for (const entry of entries) {
-    const tier = blendedCostToTier(entry.blended);
+    const tier =
+      entry.goAllowancePctPer1M !== null
+        ? goAllowancePctToTier(entry.goAllowancePctPer1M)
+        : blendedCostToTier(entry.blended);
     const priced: PricedModel = {
       tier,
       label: COST_LABELS[tier],
       input: entry.input,
       output: entry.output,
       blended: entry.blended,
+      goMonthlyLimit: entry.goMonthlyLimit,
+      goAllowancePctPer1M: entry.goAllowancePctPer1M,
     };
 
     const exactRouteKey = recentModelKey(entry.displayName, entry.routeProviderId);
@@ -324,7 +377,7 @@ export function buildPriceMaps(entries: RawPriceEntry[]): {
       byRoute[slugRoute] = priced;
     }
 
-    if (entry.normKey && (!byNorm[entry.normKey] || entry.routeProviderId === "opencode")) {
+    if (entry.normKey && entry.routeProviderId === "opencode") {
       byNorm[entry.normKey] = priced;
     }
   }
@@ -354,7 +407,15 @@ export function lookupPrice(
   routeProviderId: string,
 ): PricedModel | null {
   if (/\bfree\b/i.test(displayName)) {
-    return { tier: 0, label: "Free", input: 0, output: 0, blended: 0 };
+    return {
+      tier: 0,
+      label: "Free",
+      input: 0,
+      output: 0,
+      blended: 0,
+      goMonthlyLimit: null,
+      goAllowancePctPer1M: null,
+    };
   }
   const exact = pricesByRoute[recentModelKey(displayName, routeProviderId)];
   if (exact) return exact;

@@ -5,9 +5,10 @@ import {
   buildPriceMaps,
   buildScoreMap,
   DEFAULT_BENCHMARK_URL,
-  DEFAULT_PRICING_URL,
+  OPENCODE_GO_MODELS_URL,
+  OPENCODE_ZEN_MODELS_URL,
   parseBenchmarkPayload,
-  parseModelsDevPricing,
+  parseOpenCodeModelsPricing,
   recentModelKey,
   upsertRecentModel,
   type RawBenchmarkEntry,
@@ -19,7 +20,7 @@ const OPENCODE_PROVIDER_ID = "acp-opencode";
 const RECENT_KV_KEY = "opencode-recent-models-v2";
 const CLEARED_AT_KV_KEY = "opencode-recent-cleared-at";
 const BENCHMARK_KV_KEY = "benchmark-cache";
-const PRICING_KV_KEY = "pricing-cache";
+const PRICING_KV_KEY = "opencode-pricing-cache-v2";
 const PICKER_UPDATED_CHANNEL = "picker-updated";
 const ARTIFICIAL_ANALYSIS_API_URL = "https://artificialanalysis.ai/api/v2/language/models/free";
 const DB_HISTORY_CACHE_MS = 15_000;
@@ -45,6 +46,8 @@ const pricedModelSchema = z.object({
   input: z.number(),
   output: z.number(),
   blended: z.number(),
+  goMonthlyLimit: z.number().nullable(),
+  goAllowancePctPer1M: z.number().nullable(),
 });
 
 const pickerStateSchema = z.object({
@@ -382,17 +385,27 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   async function fetchPricingFromSource(): Promise<PricingCacheRecord> {
-    const response = await fetch(DEFAULT_PRICING_URL, {
-      headers: { accept: "application/json" },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!response.ok) {
-      throw new Error(`models.dev returned HTTP ${response.status}`);
+    const [zenRes, goRes] = await Promise.all([
+      fetch(OPENCODE_ZEN_MODELS_URL, {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(15_000),
+      }),
+      fetch(OPENCODE_GO_MODELS_URL, {
+        headers: { accept: "application/json" },
+        signal: AbortSignal.timeout(15_000),
+      }),
+    ]);
+
+    const entries: RawPriceEntry[] = [];
+    if (zenRes.ok) {
+      entries.push(...parseOpenCodeModelsPricing(await zenRes.json(), "opencode"));
     }
-    const json = (await response.json()) as unknown;
-    const entries = parseModelsDevPricing(json);
+    if (goRes.ok) {
+      entries.push(...parseOpenCodeModelsPricing(await goRes.json(), "opencode-go"));
+    }
+
     if (entries.length === 0) {
-      throw new Error("models.dev returned no priced models");
+      throw new Error(`opencode.ai returned no priced models (zen ${zenRes.status}, go ${goRes.status})`);
     }
     const record: PricingCacheRecord = {
       fetchedAt: Date.now(),
