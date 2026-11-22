@@ -5,7 +5,6 @@ with its own `package.json`, and `.bb/plugins.json` lists them.
 
 | Plugin | What it does |
 | --- | --- |
-| [document-review](plugins/document-review) | Reviews Markdown and HTML with formatting, comments, tracked personal and agent suggestions, and document history. |
 | [liminal-pool](plugins/liminal-pool) | Runs Claude Code threads on Liminal Tools' Claude accounts, with Liminal's selection and failover, a Mana Bar, and an account picker in the composer. |
 | [opencode-picker](plugins/opencode-picker) | Pins your 4 most recently used OpenCode models under Recent, shows compact relative cost badges (`Free`, `$`–`$$$$`), and displays relative 1–5 Artificial Analysis strength bars in the model picker. |
 
